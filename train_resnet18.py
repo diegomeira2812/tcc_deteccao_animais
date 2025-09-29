@@ -3,17 +3,27 @@ import torch.nn as nn
 import torch.optim as optim
 from torchvision import datasets, transforms, models
 from torch.utils.data import DataLoader
-print("🔹 Teste de execução")
 
-# 🔹 Verificação de CUDA
+# métricas
+from sklearn.metrics import (classification_report, confusion_matrix, accuracy_score,
+                             precision_score, f1_score, roc_auc_score, roc_curve,
+                             auc, precision_recall_curve, average_precision_score)
+import seaborn as sns
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+
+print("Teste de execução")
+
+# Verificação de CUDA
 if torch.cuda.is_available():
     device = torch.device("cuda")
-    print(f"✅ CUDA disponível! Usando GPU: {torch.cuda.get_device_name(0)}")
+    print(f"CUDA disponível! Usando GPU: {torch.cuda.get_device_name(0)}")
 else:
     device = torch.device("cpu")
-    print("⚠️ CUDA não disponível. Usando CPU.")
+    print("CUDA não disponível. Usando CPU.")
 
-print("🔹 Iniciando script...")
+print("Iniciando script...")
 
 # Caminho do dataset organizado
 data_dir = "dataset"
@@ -26,23 +36,23 @@ transform = transforms.Compose([
                          [0.229, 0.224, 0.225])
 ])
 
-print("🔹 Carregando datasets...")
+print("Carregando datasets...")
 train_dataset = datasets.ImageFolder(root=f"{data_dir}/train", transform=transform)
 val_dataset   = datasets.ImageFolder(root=f"{data_dir}/val", transform=transform)
 print(f"Train: {len(train_dataset)} imagens, Val: {len(val_dataset)} imagens")
 
-print("🔹 Criando dataloaders...")
+print("Criando dataloaders...")
 train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True, num_workers=0)
 val_loader   = DataLoader(val_dataset, batch_size=32, shuffle=False, num_workers=0)
-print("✅ Dataloaders prontos!")
+print("Dataloaders prontos!")
 
-print("🔹 Inicializando modelo...")
+print("Inicializando modelo...")
 from torchvision.models import ResNet18_Weights
 model = models.resnet18(weights=ResNet18_Weights.DEFAULT)
 num_features = model.fc.in_features
 model.fc = nn.Linear(num_features, 2)
 model = model.to(device)
-print("✅ Modelo carregado e movido para o device!")
+print("Modelo carregado e movido para o device!")
 
 # Loss e otimizador
 criterion = nn.CrossEntropyLoss()
@@ -50,7 +60,122 @@ optimizer = optim.Adam(model.parameters(), lr=0.0001)
 
 # Treinamento
 epochs = 10
-print("🔹 Iniciando treino...")
+print("Iniciando treino...")
+
+# Função auxiliar para avaliação e métricas
+def evaluate_and_report(model, loader, device, class_names, prefix="Val"):
+    model.eval()
+    all_probs = []
+    all_preds = []
+    all_labels = []
+
+    softmax = nn.Softmax(dim=1)
+
+    with torch.no_grad():
+        for imgs, labels in loader:
+            imgs = imgs.to(device)
+            labels = labels.to(device)
+
+            outputs = model(imgs)
+            probs = softmax(outputs).cpu().numpy()      # shape (N, C)
+            preds = np.argmax(probs, axis=1)
+
+            all_probs.append(probs)
+            all_preds.append(preds)
+            all_labels.append(labels.cpu().numpy())
+
+    all_probs = np.concatenate(all_probs, axis=0)
+    all_preds = np.concatenate(all_preds, axis=0)
+    all_labels = np.concatenate(all_labels, axis=0)
+
+    # Acurácia, precisão, F1 (micro/macro), precisão por classe via classification_report
+    acc = accuracy_score(all_labels, all_preds)
+    prec_macro = precision_score(all_labels, all_preds, average="macro", zero_division=0)
+    prec_micro = precision_score(all_labels, all_preds, average="micro", zero_division=0)
+    f1_macro = f1_score(all_labels, all_preds, average="macro", zero_division=0)
+    f1_micro = f1_score(all_labels, all_preds, average="micro", zero_division=0)
+    cls_report = classification_report(all_labels, all_preds, target_names=class_names, zero_division=0, output_dict=True)
+
+    # Matriz de confusão
+    cm = confusion_matrix(all_labels, all_preds)
+
+    # ROC-AUC (binário): usa a probabilidade da classe positiva (index 1)
+    roc_auc = None
+    pr_auc = None
+    try:
+        # garantir binário (2 classes)
+        if all_probs.shape[1] == 2:
+            y_score = all_probs[:, 1]
+            roc_auc = roc_auc_score(all_labels, y_score)
+            pr_auc = average_precision_score(all_labels, y_score)
+    except Exception:
+        roc_auc = None
+        pr_auc = None
+
+    # Impressão resumida
+    print(f"--- {prefix} Metrics ---")
+    print(f"Accuracy: {acc:.4f}")
+    print(f"Precision macro: {prec_macro:.4f}, micro: {prec_micro:.4f}")
+    print(f"F1 macro: {f1_macro:.4f}, micro: {f1_micro:.4f}")
+    if roc_auc is not None:
+        print(f"AUC-ROC: {roc_auc:.4f}")
+        print(f"AUC-PR (Average Precision): {pr_auc:.4f}")
+    else:
+        print("AUC-ROC/AUC-PR: não calculado (não binário ou erro).")
+    print("\nClassification report (por classe):")
+    print(pd.DataFrame(cls_report).transpose())
+
+    # Plot matriz de confusão
+    plt.figure(figsize=(6,5))
+    sns.heatmap(cm, annot=True, fmt="d", cmap="Blues",
+                xticklabels=class_names, yticklabels=class_names)
+    plt.xlabel("Predito")
+    plt.ylabel("Real")
+    plt.title(f"{prefix} Confusion Matrix")
+    plt.show()
+
+    # Plot ROC curve se disponível
+    if roc_auc is not None:
+        from sklearn.metrics import roc_curve
+        fpr, tpr, _ = roc_curve(all_labels, y_score)
+        plt.figure()
+        plt.plot(fpr, tpr, label=f"AUC = {roc_auc:.4f}")
+        plt.plot([0,1], [0,1], '--', color='gray')
+        plt.xlabel("False Positive Rate")
+        plt.ylabel("True Positive Rate")
+        plt.title(f"{prefix} ROC Curve")
+        plt.legend()
+        plt.show()
+
+        # Precision-Recall curve
+        precision, recall, _ = precision_recall_curve(all_labels, y_score)
+        ap = average_precision_score(all_labels, y_score)
+        plt.figure()
+        plt.plot(recall, precision, label=f"AP = {ap:.4f}")
+        plt.xlabel("Recall")
+        plt.ylabel("Precision")
+        plt.title(f"{prefix} Precision-Recall Curve")
+        plt.legend()
+        plt.show()
+
+    # Salvar relatório em CSV
+    df_report = pd.DataFrame(cls_report).transpose()
+    df_report["accuracy_overall"] = acc
+    df_report.to_csv(f"{prefix.lower()}_classification_report.csv", index=True)
+    print(f"{prefix} report salvo em {prefix.lower()}_classification_report.csv")
+
+    return {
+        "accuracy": acc,
+        "precision_macro": prec_macro,
+        "precision_micro": prec_micro,
+        "f1_macro": f1_macro,
+        "f1_micro": f1_micro,
+        "roc_auc": roc_auc,
+        "pr_auc": pr_auc,
+        "confusion_matrix": cm,
+        "classification_report_df": df_report
+    }
+
 for epoch in range(epochs):
     model.train()
     running_loss, correct, total = 0.0, 0, 0
@@ -73,21 +198,16 @@ for epoch in range(epochs):
             print(f"Epoch {epoch+1}/{epochs}, Batch {batch_idx}/{len(train_loader)}, Loss: {loss.item():.4f}")
 
     acc = 100 * correct / total
-    print(f"📊 Epoch {epoch+1}/{epochs} finalizada - Loss: {running_loss/len(train_loader):.4f}, Train Acc: {acc:.2f}%")
+    print(f"Epoch {epoch+1}/{epochs} finalizada - Loss: {running_loss/len(train_loader):.4f}, Train Acc: {acc:.2f}%")
 
-    # Validação
-    model.eval()
-    correct, total = 0, 0
-    with torch.no_grad():
-        for imgs, labels in val_loader:
-            imgs, labels = imgs.to(device), labels.to(device)
-            outputs = model(imgs)
-            _, predicted = torch.max(outputs, 1)
-            total += labels.size(0)
-            correct += (predicted == labels).sum().item()
-    val_acc = 100 * correct / total
-    print(f"✅ Val Acc: {val_acc:.2f}%\n")
+    # Validação e métricas detalhadas
+    metrics = evaluate_and_report(model, val_loader, device, val_dataset.classes, prefix=f"Val_Epoch{epoch+1}")
+    val_acc = metrics["accuracy"] * 100
+    print(f"Val Acc (epoch {epoch+1}): {val_acc:.2f}%\n")
+
+# Avaliação final (após todas as épocas)
+final_metrics = evaluate_and_report(model, val_loader, device, val_dataset.classes, prefix="Val_Final")
 
 # Salvar modelo treinado
 torch.save(model.state_dict(), "resnet18_macaco.pth")
-print("🎉 Treinamento concluído e modelo salvo em resnet18_macaco.pth!")
+print("Treinamento concluído e modelo salvo em resnet18_macaco.pth!")
