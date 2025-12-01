@@ -4,7 +4,16 @@ from PIL import Image
 
 # Caminho do modelo e da imagem de teste
 model_path = "deteccao/efficientnet_macaco.pth"
-img_path = "deteccao/imagens_teste/macaco_prego_teste.jpg"  # ou "outros_teste2.jpg"
+
+img_paths = [
+    "deteccao/imagens_teste/capivara.jpg",
+    "deteccao/imagens_teste/macaco_prego.jpg",
+    "deteccao/imagens_teste/orangotango.jpg",
+    "deteccao/imagens_teste/macaco_prego2.jpg",
+    "deteccao/imagens_teste/tamandua.jpg"
+             ]
+
+#img_path = "deteccao/imagens_teste/tamandua.jpg"
 
 # Transformação igual ao treino com EfficientNet
 transform = transforms.Compose([
@@ -23,12 +32,13 @@ model.classifier[1] = torch.nn.Linear(num_features, 2)
 model.load_state_dict(torch.load(model_path, weights_only=True))
 model.eval()
 
-# Prever imagem
-img = Image.open(img_path).convert("RGB")
-img_t = transform(img).unsqueeze(0)  # adiciona batch
-with torch.no_grad():
-    output = model(img_t)
-    _, pred = torch.max(output, 1)
+classes = ["macaco-prego", "outros"]
+print("-----------EfficientNetB0--------------")
 
-classes = ["macaco_prego", "outros"]
-print(f"A imagem é classificada como: {classes[pred.item()]}")
+for path in img_paths:
+    img = Image.open(path).convert("RGB")
+    img_t = transform(img).unsqueeze(0)  # adiciona batch
+    with torch.no_grad():
+        output = model(img_t)
+        _, pred = torch.max(output, 1)
+    print(f"A imagem é classificada como: {classes[pred.item()]}")
